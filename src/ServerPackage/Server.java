@@ -1,5 +1,7 @@
 package ServerPackage;
 
+import OperationSerializable.Operation;
+
 import java.io.*;
 import java.net.InetSocketAddress;
 import java.net.ServerSocket;
@@ -7,7 +9,14 @@ import java.net.Socket;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public class Server {
-    private static final AtomicInteger compteur = new AtomicInteger(0);
+    private static final AtomicInteger compteurClients = new AtomicInteger(0);
+
+    private static int compteurOperations = 0;
+
+    private static synchronized void incrementerCompteur() {
+        compteurOperations++;
+        System.out.println("Compteur global d'operations = " + compteurOperations);
+    }
 
     static void main() {
         try (ServerSocket server = new ServerSocket()) {
@@ -16,20 +25,20 @@ public class Server {
             System.out.println("Je suis un serveur en attente de connexions");
             while (true) {
                 Socket client = server.accept();
-                int numero = compteur.incrementAndGet();
+                int numero = compteurClients.incrementAndGet();
                 System.out.println("Client n°" + numero + " connecte : " + client.getRemoteSocketAddress());
-                new Thread(new ClientHandler(client, numero)).start();
+                new Thread(new ClientProcess(client, numero)).start();
             }
         } catch (IOException e) {
             e.printStackTrace();
         }
     }
 
-    private static class ClientHandler implements Runnable {
+    private static class ClientProcess implements Runnable {
         private final Socket clientSocket;
         private final int numero;
 
-        public ClientHandler(Socket socket, int numero) {
+        public ClientProcess(Socket socket, int numero) {
             this.clientSocket = socket;
             this.numero = numero;
         }
@@ -37,63 +46,48 @@ public class Server {
         @Override
         public void run() {
             try (Socket s = clientSocket;
-                 BufferedReader in = new BufferedReader(new InputStreamReader(s.getInputStream()));
-                 PrintWriter out = new PrintWriter(s.getOutputStream(), true)) {
+                 ObjectOutputStream out = new ObjectOutputStream(s.getOutputStream())) {
+                out.flush();
+                ObjectInputStream in = new ObjectInputStream(s.getInputStream());
 
-                out.println("Bienvenue, vous etes le client n°" + numero);
+                out.writeObject("Bienvenue, vous etes le client n°" + numero);
+                out.flush();
 
-                String a;
-                while ((a = in.readLine()) != null) {
-                    if (a.equals("x")) break;
-
-                    if (a.equals("syntaxe invalide")) {
-                        System.out.println("Client n°" + numero + " -> syntaxe invalide");
-                        out.println("syntaxe invalide");
-                        continue;
-                    }
-
-                    String op = in.readLine();
-                    String b = in.readLine();
-                    if (op == null || b == null) {
-                        System.out.println("Client n°" + numero + " : operation invalide");
+                while (true) {
+                    Operation operation = (Operation) in.readObject();
+                    if (operation == null) {
+                        System.out.println("Client n°" + numero + " : fin de la communication");
                         break;
                     }
 
-                    String resultat = calculer(a, op, b);
-                    if (resultat.equals("division par 0") || resultat.equals("operation invalide")) {
-                        System.out.println("Client n°" + numero + " -> " + resultat);
-                    } else {
-                        System.out.println("Client n°" + numero + " -> " + a + op + b + " = " + resultat);
-                    }
-                    out.println(resultat);
-                }
-            } catch (IOException e) {
-                System.out.println("Client n°" + numero + " : connexion perdue (" + e.getMessage() + ")");
-            }
-            System.out.println("Client n°" + numero + " deconnecte");
-        }
-    }
+                    double a = operation.getO1();
+                    char op = operation.getOp();
+                    double b = operation.getO2();
 
-    static String calculer(String a, String op, String b) {
-        double i, j;
-        try {
-            i = Double.parseDouble(a);
-            j = Double.parseDouble(b);
-        } catch (NumberFormatException e) {
-            return "operation invalide";
+                    Object reponse;
+                    switch (op) {
+                        case '+': reponse = a + b; break;
+                        case '-': reponse = a - b; break;
+                        case '*': reponse = a * b; break;
+                        case '/':
+                            if (b == 0) reponse = "division par 0";
+                            else reponse = a / b;
+                            break;
+                        default: reponse = "operateur invalide :" + op;
+                    }
+
+                    System.out.println("Client n°" + numero + " : " + a + op + b + " => reponse : " + reponse);
+                    incrementerCompteur();
+
+                    out.writeObject(reponse);
+                    out.flush();
+                }
+            } catch (EOFException e) {
+                System.out.println("Client n°" + numero + " deconnecte");
+            } catch (IOException | ClassNotFoundException e) {
+                System.out.println("Client n°" + numero + " : erreur (" + e.getMessage() + ")");
+            }
+            System.out.println("Client n°" + numero + " : socket ferme");
         }
-        double r;
-        switch (op) {
-            case "+": r = i + j; break;
-            case "-": r = i - j; break;
-            case "*": r = i * j; break;
-            case "/":
-                if (j == 0) return "division par 0";
-                r = i / j;
-                break;
-            default:
-                return "operation invalide";
-        }
-        return String.valueOf(r);
     }
 }
